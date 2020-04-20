@@ -61,7 +61,7 @@ func UserAuth(next http.Handler) http.Handler {
 		//       with username assigned to the username corresponding to the session token:
 		// request = request.WithContext(context.WithValue(request.Context(), userKey, username))
 
-		// TODO: if the session token is invalid, run the following line of code:
+		// TODO: before returning, run the following line of code:
 		// next.ServeHTTP(w, request)
 
 		//////////////////////////////////
