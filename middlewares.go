@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"net/http"
 	"time"
 
@@ -49,20 +50,24 @@ func UserAuth(next http.Handler) http.Handler {
 		//////////////////////////////////
 
 		// TODO: look up the session token in the database
-
-		// TODO: make sure the session token exists (i.e. your query returned something)
-
+		row:=db.QueryRow("SELECT username, token, expires FROM sessions WHERE token = ?", sessionToken)
 		// TODO: assign the results of your query to some variables
-
-		// TODO: check that the session token has not expired
-		// hint: time.Unix, time.Now, and x.Before(y) may be useful here
-
-		// TODO: if the session token is valid, run the following line of code,
-		//       with username assigned to the username corresponding to the session token:
-		// request = request.WithContext(context.WithValue(request.Context(), userKey, username))
-
-		// TODO: before returning, run the following line of code:
-		// next.ServeHTTP(w, request)
+		var userName, userToken string
+		var sessionExpire int64
+		err = row.Scan(&userName, &userToken, &sessionExpire)
+		// TODO: make sure the session token exists (i.e. your query returned something)
+		if err == nil  {
+			// TODO: check that the session token has not expired
+			// hint: time.Unix, time.Now, and x.Before(y) may be useful here
+			if time.Now().Before(time.Unix(sessionExpire, 0)){
+				// TODO: if the session token is valid, run the following line of code,
+				//       with username assigned to the username corresponding to the session token:
+				request = request.WithContext(context.WithValue(request.Context(), userKey, userName))
+			}
+		}
+		// TODO: before returning, run the following line of code
+		next.ServeHTTP(w, request)
+		return
 
 		//////////////////////////////////
 		// END TASK 1: YOUR CODE HERE

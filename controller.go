@@ -7,10 +7,14 @@ package main
 import (
 	"database/sql"
 	"fmt"
+	"io/ioutil"
 	_ "io/ioutil"
 	"net/http"
+	"os"
 	_ "os"
+	"path/filepath"
 	_ "path/filepath"
+	"regexp"
 	"strings"
 	"text/template"
 	"time"
@@ -98,22 +102,31 @@ func processLogout(response http.ResponseWriter, request *http.Request) {
 	// get the session token cookie
 	cookie, err := request.Cookie("session_token")
 	// empty assignment to suppress unused variable warning
-	_, _ = cookie, err
+	if err != nil {
+		response.WriteHeader(http.StatusInternalServerError)
+		fmt.Fprint(response, err.Error())
+		return
+	}
+
 
 	// get username of currently logged in user
 	username := getUsernameFromCtx(request)
 	// empty assignment to suppress unused variable warning
-	_ = username
-
+	_= username
 	//////////////////////////////////
 	// BEGIN TASK 2: YOUR CODE HERE
 	//////////////////////////////////
 
 	// TODO: clear the session token cookie in the user's browser
 	// HINT: to clear a cookie, set its MaxAge to -1
-
+	cookie.MaxAge = -1
 	// TODO: delete the session from the database
-
+	_, err = db.Exec("DELETE FROM sessions WHERE token = ?", cookie.Value)
+	if err != nil{
+		response.WriteHeader(http.StatusInternalServerError)
+		fmt.Fprint(response, err.Error())
+		return
+	}
 	//////////////////////////////////
 	// END TASK 2: YOUR CODE HERE
 	//////////////////////////////////
@@ -127,12 +140,47 @@ func processUpload(response http.ResponseWriter, request *http.Request, username
 	//////////////////////////////////
 	// BEGIN TASK 3: YOUR CODE HERE
 	//////////////////////////////////
+	file_obj, header, err := request.FormFile("file")
+	filename := header.Filename
+	if len(filename) > 50 || len(filename) < 1 {
+		response.WriteHeader(http.StatusInternalServerError)
+		fmt.Fprint(response, err.Error())
+		return
+	}
+	reg, err := regexp.Compile("[^a-zA-Z0-9.]+")
+	notValid := reg.Match([]byte(filename))
+	if notValid {
+		response.WriteHeader(http.StatusInternalServerError)
+		fmt.Fprint(response, err.Error())
+		return
+	}
+	fileData, err := ioutil.ReadAll(file_obj)
+	defer file_obj.Close()
+	if err != nil {
+		response.WriteHeader(http.StatusInternalServerError)
+		fmt.Fprint(response, err.Error())
+		return
+	}
+	fileResolution := filepath.Join(filePath, username)
+	err = os.Mkdir(fileResolution, 0644)
+	fileResolution = filepath.Join(fileResolution, filename)
+	err = ioutil.WriteFile(fileResolution, fileData, 0644)
+	if err != nil {
+		response.WriteHeader(http.StatusInternalServerError)
+		fmt.Fprint(response, err.Error())
+		return
+	}
+	_, err = db.Exec("INSERT INTO files VALUES (NULL, ?, ?, ?)", username, username, filename)
+	if err != nil{
+		response.WriteHeader(http.StatusInternalServerError)
+		fmt.Fprint(response, err.Error())
+		return
+	}
+	//verify cookie
 
 	// HINT: files should be stored in const filePath = "./files"
 
 	// replace this statement
-	fmt.Fprintf(response, "placeholder")
-
 	//////////////////////////////////
 	// END TASK 3: YOUR CODE HERE
 	//////////////////////////////////
@@ -154,9 +202,28 @@ func listFiles(response http.ResponseWriter, request *http.Request, username str
 
 	// TODO: for each of the user's files, add a
 	// corresponding fileInfo struct to the files slice.
-
+	fileQuery, err := db.Query("SELECT owner, filename FROM files WHERE recipient = ?", username)
+	defer fileQuery.Close()
+	for fileQuery.Next() {
+		var owner, filename string
+		err := fileQuery.Scan(&owner, &filename)
+		if err != nil {
+			response.WriteHeader(http.StatusInternalServerError)
+			fmt.Fprint(response, err.Error())
+			return
+		}
+		fullPath := filepath.Join(filePath, username, filename)
+		fileInformation := fileInfo{filename, owner,fullPath}
+		files = append(files, fileInformation)
+	}
+	err = fileQuery.Err()
+	if err != nil {
+		response.WriteHeader(http.StatusInternalServerError)
+		fmt.Fprint(response, err.Error())
+		return
+	}
 	// replace this line
-	fmt.Fprintf(response, "placeholder")
+	//fmt.Fprintf(files, "placeholder")
 
 	//////////////////////////////////
 	// END TASK 4: YOUR CODE HERE
@@ -180,14 +247,26 @@ func listFiles(response http.ResponseWriter, request *http.Request, username str
 func getFile(response http.ResponseWriter, request *http.Request, username string) {
 	fileString := strings.TrimPrefix(request.URL.Path, "/file/")
 
-	_ = fileString
 
 	//////////////////////////////////
 	// BEGIN TASK 5: YOUR CODE HERE
 	//////////////////////////////////
-
-	// replace this line
-	fmt.Fprintf(response, "placeholder")
+	splitString := strings.Split(fileString, "/")
+	temp_username := splitString[1]
+	if temp_username != username {
+		response.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+	temp_filename := splitString[2]
+	row := db.QueryRow("SELECT recipient, filename FROM files WHERE recipient = ? AND filename = ?", username, temp_filename)
+	var recipient, filename string
+	err := row.Scan(&recipient, &filename)
+	if err != nil {
+		response.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+	setNameOfServedFile(response, filename)
+	http.ServeFile(response,request, fileString)
 
 	//////////////////////////////////
 	// END TASK 5: YOUR CODE HERE
