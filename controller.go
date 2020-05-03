@@ -15,9 +15,11 @@ import (
 	"path/filepath"
 	_ "path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"text/template"
 	"time"
+	_"strconv"
 
 	log "github.com/sirupsen/logrus"
 )
@@ -144,25 +146,32 @@ func processUpload(response http.ResponseWriter, request *http.Request, username
 	filename := header.Filename
 	if len(filename) > 50 || len(filename) < 1 {
 		response.WriteHeader(http.StatusInternalServerError)
-		fmt.Fprint(response, err.Error())
 		return
 	}
 	reg, err := regexp.Compile("[^a-zA-Z0-9.]+")
 	notValid := reg.Match([]byte(filename))
 	if notValid {
 		response.WriteHeader(http.StatusInternalServerError)
-		fmt.Fprint(response, err.Error())
 		return
 	}
 	fileData, err := ioutil.ReadAll(file_obj)
 	defer file_obj.Close()
-	if err != nil {
+	var id int
+	row := db.QueryRow("SELECT id FROM users WHERE username = ?", username)
+	err = row.Scan(&id)
+	if err == sql.ErrNoRows {
+		response.WriteHeader(http.StatusNotFound)
+		fmt.Fprintf(response, "unknown user")
+		return
+	}
+	stringFileID:= strconv.Itoa(id)
+	fileResolution := filepath.Join(filePath, stringFileID)
+	err = os.MkdirAll(fileResolution, 0644)
+	if err!= nil {
 		response.WriteHeader(http.StatusInternalServerError)
 		fmt.Fprint(response, err.Error())
 		return
 	}
-	fileResolution := filepath.Join(filePath, username)
-	err = os.Mkdir(fileResolution, 0644)
 	fileResolution = filepath.Join(fileResolution, filename)
 	err = ioutil.WriteFile(fileResolution, fileData, 0644)
 	if err != nil {
@@ -170,12 +179,13 @@ func processUpload(response http.ResponseWriter, request *http.Request, username
 		fmt.Fprint(response, err.Error())
 		return
 	}
-	_, err = db.Exec("INSERT INTO files VALUES (NULL, ?, ?, ?)", username, username, filename)
+	_, err = db.Exec("INSERT INTO files VALUES (NULL, ?, ?, ?, ?)", username, username, filename, stringFileID)
 	if err != nil{
 		response.WriteHeader(http.StatusInternalServerError)
 		fmt.Fprint(response, err.Error())
 		return
 	}
+
 	//verify cookie
 
 	// HINT: files should be stored in const filePath = "./files"
@@ -202,17 +212,23 @@ func listFiles(response http.ResponseWriter, request *http.Request, username str
 
 	// TODO: for each of the user's files, add a
 	// corresponding fileInfo struct to the files slice.
-	fileQuery, err := db.Query("SELECT owner, filename FROM files WHERE recipient = ?", username)
+	fileQuery, err := db.Query("SELECT owner, filename, fileid FROM files WHERE recipient = ?", username)
 	defer fileQuery.Close()
+	if err != nil {
+		response.WriteHeader(http.StatusInternalServerError)
+		fmt.Fprint(response, err.Error())
+		return
+	}
 	for fileQuery.Next() {
-		var owner, filename string
-		err := fileQuery.Scan(&owner, &filename)
+		var owner, filename, fileid string
+		err := fileQuery.Scan(&owner, &filename, &fileid)
 		if err != nil {
 			response.WriteHeader(http.StatusInternalServerError)
 			fmt.Fprint(response, err.Error())
 			return
 		}
-		fullPath := filepath.Join(filePath, username, filename)
+
+		fullPath := filepath.Join(filePath, fileid, filename)
 		fileInformation := fileInfo{filename, owner,fullPath}
 		files = append(files, fileInformation)
 	}
@@ -251,12 +267,12 @@ func getFile(response http.ResponseWriter, request *http.Request, username strin
 	//////////////////////////////////
 	// BEGIN TASK 5: YOUR CODE HERE
 	//////////////////////////////////
-	splitString := strings.Split(fileString, "/")
-	temp_username := splitString[1]
-	if temp_username != username {
+	exists:= fileExists(fileString)
+	if !exists {
 		response.WriteHeader(http.StatusInternalServerError)
 		return
 	}
+	splitString := strings.Split(fileString, "/")
 	temp_filename := splitString[2]
 	row := db.QueryRow("SELECT recipient, filename FROM files WHERE recipient = ? AND filename = ?", username, temp_filename)
 	var recipient, filename string
@@ -280,20 +296,59 @@ func setNameOfServedFile(response http.ResponseWriter, fileName string) {
 func processShare(response http.ResponseWriter, request *http.Request, sender string) {
 	recipient := request.FormValue("username")
 	filename := request.FormValue("filename")
-	_ = filename
-
 	if sender == recipient {
 		response.WriteHeader(http.StatusBadRequest)
 		fmt.Fprint(response, "can't share with yourself")
 		return
 	}
-
-	//////////////////////////////////
+	///////////////////////////
 	// BEGIN TASK 6: YOUR CODE HERE
 	//////////////////////////////////
 
-	// replace this line
-	fmt.Fprintf(response, "placeholder")
+	//check that they own this file
+	row := db.QueryRow("SELECT owner, fileid FROM files WHERE owner = ? AND filename = ?", sender, filename)
+	var owner, fileid string
+	err := row.Scan(&owner, &fileid)
+	if err != nil {
+		response.WriteHeader(http.StatusConflict)
+		return
+	}
+	fullPath := filepath.Join(filePath, fileid, filename)
+	fileData, err := ioutil.ReadFile(fullPath)
+	if err != nil {
+		response.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+
+	var id int
+	row = db.QueryRow("SELECT id FROM users WHERE username = ?", recipient)
+	err = row.Scan(&id)
+	if err != nil {
+		response.WriteHeader(http.StatusNotFound)
+		fmt.Fprintf(response, "unknown user")
+		return
+	}
+	stringFileID:= strconv.Itoa(id)
+	fileResolution := filepath.Join(filePath, stringFileID)
+	err = os.MkdirAll(fileResolution, 0644)
+	if err!= nil {
+		response.WriteHeader(http.StatusInternalServerError)
+		fmt.Fprint(response, err.Error())
+		return
+	}
+	fileResolution = filepath.Join(fileResolution, filename)
+	err = ioutil.WriteFile(fileResolution, fileData, 0644)
+	if err != nil {
+		response.WriteHeader(http.StatusInternalServerError)
+		fmt.Fprint(response, err.Error())
+		return
+	}
+	_, err = db.Exec("INSERT INTO files VALUES (NULL, ?, ?, ?, ?)", owner, recipient, filename, stringFileID)
+	if err != nil{
+		response.WriteHeader(http.StatusInternalServerError)
+		fmt.Fprint(response, err.Error())
+		return
+	}
 
 	//////////////////////////////////
 	// END TASK 6: YOUR CODE HERE
@@ -310,7 +365,6 @@ func initSession(response http.ResponseWriter, username string) {
 		fmt.Fprint(response, err.Error())
 		return
 	}
-
 	expires := time.Now().Add(sessionDuration)
 
 	// Store session in database
@@ -329,3 +383,4 @@ func initSession(response http.ResponseWriter, username string) {
 		SameSite: http.SameSiteStrictMode,
 	})
 }
+
